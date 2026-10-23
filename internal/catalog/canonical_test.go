@@ -109,3 +109,51 @@ func TestPricedByCanonicalIDOfTwoPrices(t *testing.T) {
 		}
 	}
 }
+
+// A canonical that ends in a checkpoint tag still prices the untagged id
+// vendors serve and log (#3423, #1520's fix retargeted): models.dev moved
+// DeepSeek's aliases to deepseek/deepseek-v4.1-flash-1017 on 2026-10-18,
+// and deepseek-v4.1-flash priced at nothing again. The tag is the
+// canonical's alone: an id that keeps its tag names that checkpoint
+// (deepseek-v4.1-flash-1017 asks it, answered above by the exact match),
+// and an untagged canonical never loses a part of its id it needs
+// (deepseek-v4-pro-0813 stays whole, its 0813 beyond the 3–4 digits of a
+// date tag being beside the point: it is the canonical itself here).
+func TestPricedByCanonicalIDOfATaggedCanonical(t *testing.T) {
+	writeCatalog(t, `{"deepseek":{"id":"deepseek","models":{
+"deepseek-flash":{"id":"deepseek-flash","cost":{"input":0.15,"output":0.6,"cache_read":0.003},"canonical_model_id":"deepseek/deepseek-v4.1-flash-1017"},
+"deepseek-v4-flash":{"id":"deepseek-v4-flash","cost":{"input":0.15,"output":0.6,"cache_read":0.003},"canonical_model_id":"deepseek/deepseek-v4.1-flash-1017"},
+"deepseek-v4-flash-vision-exp":{"id":"deepseek-v4-flash-vision-exp","cost":{"input":0.15,"output":0.6,"cache_read":0.003},"canonical_model_id":"deepseek/deepseek-v4.1-flash-1017"}}}}`)
+	for _, id := range []string{"deepseek-v4.1-flash", "deepseek/deepseek-v4.1-flash", "deepseek-v4-1-flash"} {
+		if p, ok := PricedBy([]string{"workbuddy", "deepseek"}, id); !ok || p.Input != 0.15 || p.Output != 0.6 || p.CacheRead != 0.003 {
+			t.Errorf("PricedBy(%q) = %+v, %v, want 0.15/0.6/0.003 through the -1017 canonical", id, p, ok)
+		}
+	}
+	// the tagged id asks its own checkpoint, priced by the exact match above
+	if p, ok := PricedBy([]string{"deepseek"}, "deepseek-v4.1-flash-1017"); !ok || p.Input != 0.15 {
+		t.Errorf("deepseek-v4.1-flash-1017 = %+v, %v, want 0.15", p, ok)
+	}
+	// a reseller's variant under the tagged canonical still prices nothing
+	if p, ok := PricedBy([]string{"baseten"}, "deepseek-v4.1-flash"); ok {
+		t.Errorf("baseten deepseek-v4.1-flash priced %+v by a variant", p)
+	}
+	// the untagging is the canonical's alone, never the asked id's. An
+	// untagged ask priced through a tagged canonical is the point (V4 Pro
+	// is checkpointed as deepseek-v4-pro-0813, a relay that serves it
+	// untagged asks deepseek-v4-pro):
+	writeCatalog(t, `{"deepseek":{"id":"deepseek","models":{
+"deepseek-v4-pro-0813":{"id":"deepseek-v4-pro-0813","cost":{"input":0.66,"output":1.98,"cache_read":0.022},"canonical_model_id":"deepseek/deepseek-v4-pro-0813"}}}}`)
+	if p, ok := PricedBy([]string{"deepseek"}, "deepseek-v4-pro"); !ok || p.Input != 0.66 {
+		t.Errorf("deepseek-v4-pro = %+v, %v, want the -0813 canonical's 0.66", p, ok)
+	}
+	if p, ok := PricedBy([]string{"deepseek"}, "deepseek-v4-pro-0813"); !ok || p.Input != 0.66 {
+		t.Errorf("deepseek-v4-pro-0813 = %+v, %v, want its own 0.66", p, ok)
+	}
+	// and an ask that keeps a tag never loses it: a canonical without one
+	// doesn't price an id with it, whichever side dates the checkpoint
+	writeCatalog(t, `{"deepseek":{"id":"deepseek","models":{
+"deepseek-v4-pro":{"id":"deepseek-v4-pro","cost":{"input":0.66,"output":1.98,"cache_read":0.022},"canonical_model_id":"deepseek/deepseek-v4-pro"}}}}`)
+	if p, ok := PricedBy([]string{"deepseek"}, "deepseek-v4-pro-0813"); ok {
+		t.Errorf("deepseek-v4-pro-0813 priced %+v off the untagged canonical", p)
+	}
+}

@@ -784,19 +784,21 @@ func PricedBy(providers []string, id string) (Price, bool) {
 
 // canonicallyPriced is the list price the first of providers gives the
 // model whose canonical_model_id is b (a bare id), by that id, then with a
-// dot and a dash taken for the same. Only a vendor's own model counts — an
-// entry whose canonical names the provider listing it as its maker
-// (deepseek's deepseek-flash, deepseek/deepseek-v4.1-flash) — and only at
-// a price: a reseller's entry under a canonical is often a variant of the
-// model, sold at a price of its own (OpenCode's mimo-v2.6-flash-free at $0,
-// Baseten's -Fast at twice the price), and a model a relay doesn't list by
-// its id is priced at its maker's, as it was. A vendor listing several
-// entries under one canonical at different prices names none of them:
-// which one was called isn't known.
+// dot and a dash taken for the same, then without the checkpoint tag a
+// canonical ends in. Only a vendor's own model counts — an entry whose
+// canonical names the provider listing it as its maker (deepseek's
+// deepseek-flash, deepseek/deepseek-v4.1-flash) — and only at a price: a
+// reseller's entry under a canonical is often a variant of the model, sold
+// at a price of its own (OpenCode's mimo-v2.6-flash-free at $0, Baseten's
+// -Fast at twice the price), and a model a relay doesn't list by its id is
+// priced at its maker's, as it was. A vendor listing several entries under
+// one canonical at different prices names none of them: which one was
+// called isn't known.
 func canonicallyPriced(all map[string]mdProvider, providers []string, b string) (Price, bool) {
 	for _, same := range []func(c string) bool{
 		func(c string) bool { return bareID(c) == b },
 		func(c string) bool { return dashed(bareID(c)) == dashed(b) },
+		func(c string) bool { return dashed(untagged(bareID(c))) == dashed(b) },
 	} {
 		for _, pid := range providers {
 			var got *Price
@@ -823,6 +825,33 @@ func canonicallyPriced(all map[string]mdProvider, providers []string, b string) 
 // dashed is an id with its dots as dashes: the spelling two ids are compared
 // in when one vendor writes a model's version 4.6 and another 4-6.
 func dashed(id string) string { return strings.ReplaceAll(id, ".", "-") }
+
+// untagged is an id without the checkpoint tag it ends in, when that tag is
+// a date-like run of digits: models.dev retargets a canonical at each new
+// checkpoint (deepseek/deepseek-v4.1-flash-1017), while vendors keep serving
+// and logging the untagged id (#3423, #1520 again). Version numbers are
+// never tags: a tag is 3+ digits, a version at most 2. The asked-for id is
+// never untagged — an id with a tag names that checkpoint, not the model.
+func untagged(id string) string {
+	if i := strings.LastIndexByte(id, '-'); i > 0 && dateTag(id[i+1:]) {
+		return id[:i]
+	}
+	return id
+}
+
+// dateTag is whether s is a date-like run of digits a canonical ends in:
+// 1017, 0731 — not 4 (a version), not 2 (a size), not -1, x, or other words.
+func dateTag(s string) bool {
+	if len(s) < 3 || len(s) > 4 || len(s) != len([]rune(s)) {
+		return false
+	}
+	for _, r := range s {
+		if r < '0' || r > '9' {
+			return false
+		}
+	}
+	return true
+}
 
 // APIOf is the API a models.dev provider's model is served on, when the
 // catalog says it's one of its own: "responses", "anthropic" or "gemini"
